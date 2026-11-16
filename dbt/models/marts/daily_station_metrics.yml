@@ -1,0 +1,12 @@
+version: 2
+
+models:
+  - name: daily_station_metrics
+    description: Daily network-level availability and station health indicators.
+    columns:
+      - name: snapshot_date
+        data_tests: [not_null, unique]
+      - name: station_count
+        data_tests: [not_null]
+      - name: bike_availability_rate
+        data_tests: [not_null]
