@@ -16,8 +16,8 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -41,7 +41,7 @@ jobs:
       AWS_BUDGET_ALERT_EMAIL: ${{ vars.AWS_BUDGET_ALERT_EMAIL }}
       API_ALLOWED_CIDR: ${{ vars.API_ALLOWED_CIDR }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.10.5
