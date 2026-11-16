@@ -1,0 +1,98 @@
+name: quality-and-deploy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aws-deploy
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install project
+        run: python -m pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check .
+      - name: Test ingestion and dbt models
+        run: pytest -q
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: quality
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      AWS_BUDGET_ALERT_EMAIL: ${{ vars.AWS_BUDGET_ALERT_EMAIL }}
+      API_ALLOWED_CIDR: ${{ vars.API_ALLOWED_CIDR }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+      - name: Verify deployment configuration
+        env:
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          test -n "$AWS_ROLE_ARN" || { echo "Set repository secret AWS_ROLE_ARN"; exit 1; }
+          test -n "$TF_STATE_BUCKET" || { echo "Set repository variable TF_STATE_BUCKET"; exit 1; }
+          test -n "$AWS_REGION" || { echo "Set repository variable AWS_REGION"; exit 1; }
+          test -n "$AWS_BUDGET_ALERT_EMAIL" || { echo "Set repository variable AWS_BUDGET_ALERT_EMAIL"; exit 1; }
+          test -n "$API_ALLOWED_CIDR" || { echo "Set repository variable API_ALLOWED_CIDR (a trusted IPv4 CIDR)"; exit 1; }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Initialize Terraform state backend
+        working-directory: infra/terraform
+        run: |
+          terraform init \
+            -backend-config="bucket=$TF_STATE_BUCKET" \
+            -backend-config="key=dataops-velib/terraform.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+      - name: Create budget alarm and image registry
+        working-directory: infra/terraform
+        run: |
+          terraform apply -auto-approve \
+            -target=aws_budgets_budget.monthly \
+            -target=aws_ecr_repository.app \
+            -var="aws_region=$AWS_REGION" \
+            -var="budget_alert_email=$AWS_BUDGET_ALERT_EMAIL"
+      - name: Authenticate to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and publish image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY: dataops-velib
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build --tag "$REGISTRY/$REPOSITORY:$IMAGE_TAG" .
+          docker push "$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+      - name: Deploy platform and enable daily schedule
+        working-directory: infra/terraform
+        run: |
+          terraform apply -auto-approve \
+            -var="aws_region=$AWS_REGION" \
+            -var="budget_alert_email=$AWS_BUDGET_ALERT_EMAIL" \
+            -var="api_allowed_cidr=$API_ALLOWED_CIDR" \
+            -var="image_tag=${GITHUB_SHA}" \
+            -var="service_desired_count=1" \
+            -var="schedule_enabled=true"

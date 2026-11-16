@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: main
+    tables:
+      - name: station_snapshots
+        identifier: raw_station_snapshots
+        description: Validated daily CityBikes station snapshots, deduplicated on write.

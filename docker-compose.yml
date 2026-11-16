@@ -1,0 +1,110 @@
+services:
+  object-store:
+    image: localstack/localstack:3.8.1
+    environment:
+      SERVICES: s3
+      DEFAULT_REGION: ${AWS_REGION:-eu-west-3}
+      PERSISTENCE: "1"
+    volumes:
+      - object-store-data:/var/lib/localstack
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  bucket-init:
+    build: .
+    command: ["python", "-m", "dataops.init_bucket"]
+    depends_on:
+      object-store:
+        condition: service_healthy
+    environment:
+      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-dataops}
+      S3_ENDPOINT_URL: http://object-store:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: ${AWS_REGION:-eu-west-3}
+    restart: "no"
+
+  prefect-server:
+    build: .
+    command: ["prefect", "server", "start", "--host", "0.0.0.0"]
+    environment:
+      PREFECT_SERVER_API_HOST: 0.0.0.0
+      PREFECT_UI_URL: http://localhost:4200
+      PREFECT_HOME: /prefect
+    volumes:
+      - prefect-data:/prefect
+    ports:
+      - "4200:4200"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4200/api/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  api:
+    build: .
+    command: ["uvicorn", "dataops.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: &app-environment
+      APP_ROOT: /app
+      WAREHOUSE_PATH: /data/warehouse.duckdb
+      API_WAREHOUSE_PATH: /data/api_warehouse.duckdb
+      WAREHOUSE_SYNC_FROM_OBJECT_STORE: "true"
+      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET:-dataops}
+      S3_ENDPOINT_URL: http://object-store:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: ${AWS_REGION:-eu-west-3}
+    volumes:
+      - warehouse-data:/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      bucket-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  scheduler:
+    build: .
+    command: ["python", "-m", "dataops.schedule"]
+    environment:
+      <<: *app-environment
+      PREFECT_API_URL: http://prefect-server:4200/api
+      CITYBIKES_NETWORK: ${CITYBIKES_NETWORK:-velib}
+      CITYBIKES_API_URL: ${CITYBIKES_API_URL:-}
+      SCHEDULE_CRON: ${SCHEDULE_CRON:-0 6 * * *}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+    volumes:
+      - warehouse-data:/data
+    depends_on:
+      bucket-init:
+        condition: service_completed_successfully
+      prefect-server:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  object-store-data:
+  warehouse-data:
+  prefect-data:

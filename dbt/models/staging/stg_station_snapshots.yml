@@ -1,0 +1,14 @@
+version: 2
+
+models:
+  - name: stg_station_snapshots
+    description: Typed and normalized station-level daily observations.
+    columns:
+      - name: snapshot_date
+        data_tests: [not_null]
+      - name: station_id
+        data_tests: [not_null]
+      - name: station_name
+        data_tests: [not_null]
+      - name: free_bikes
+        data_tests: [not_null]

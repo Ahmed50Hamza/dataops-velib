@@ -1,0 +1,17 @@
+.env
+.venv/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+target/
+dbt/logs/
+dbt/target/
+dbt/.user.yml
+data/
+*.duckdb
+*.duckdb.wal
+.terraform/
+terraform.tfstate*
+*.tfplan
